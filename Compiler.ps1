@@ -115,7 +115,8 @@ $compileButton.Add_Click({
     $managed = "$currentGamePath\yapyap_Data\Managed"
 
     $tempCs = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.cs'
-    [System.IO.File]::WriteAllText($tempCs, $textArea.Text)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($tempCs, $textArea.Text, $utf8NoBom)
 
     $refs = @(
         "$currentGamePath\BepInEx\core\BepInEx.dll",
@@ -124,7 +125,9 @@ $compileButton.Add_Click({
         "$managed\UnityEngine.CoreModule.dll",
         "$managed\UnityEngine.dll",
         "$managed\UnityEngine.IMGUIModule.dll",
-        "$managed\UnityEngine.InputLegacyModule.dll"
+        "$managed\UnityEngine.TextRenderingModule.dll",
+        "$managed\UnityEngine.InputLegacyModule.dll",
+        "$managed\Mirror.dll"
     )
 
     $missingRefs = $refs | Where-Object { -not (Test-Path $_) }
