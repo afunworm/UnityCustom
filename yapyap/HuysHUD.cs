@@ -49,21 +49,23 @@ namespace HuysHUD
 
         // Props tab
         private int propsCategory = 0;
-        private string[] propsCategoryLabels = new string[] { "Potions", "Gold", "Wands", "Enemies" };
+        private string[] propsCategoryLabels = new string[] { "Potions", "Gold", "Wands", "Items", "Enemies" };
 
-        private string[] potionKeys   = new string[] { "proppotion_maxhp","proppotion_cdr","proppotion_staminaboost","proppotion_doublejump" };
-        private string[] potionLabels = new string[] { "Max HP","CDR","Stamina","Dbl Jump" };
+        // Dynamic lists built from NetworkManager.singleton.spawnPrefabs
+        private List<string> potionNames = new List<string>();
+        private List<string> goldNames   = new List<string>();
+        private List<string> itemNames   = new List<string>();
         private int potionIndex = 0;
-
-        private string[] goldKeys   = new string[] { "propgoldcoin","propgoldpile","propgoldbigpile","propgem" };
-        private string[] goldLabels = new string[] { "Coin","Pile","Big Pile","Gem" };
-        private int goldIndex = 0;
-
-        private int wandIndex = 0;
-
-        private string[] enemyKeys   = new string[] { "Frog", "Spider","Goat","Fetch","Eye","Slime","Goblin","Jester","BombMan","Guard","Gargoyle","UsEnemy","Merchant" };
-        private string[] enemyLabels = new string[] { "Frog", "Spider","Goat","Fetch","Eye","Slime","Goblin","Jester","Bomber","Guard","Gargoyle","UsEnemy","Merchant" };
-        private int enemyIndex = 0;
+        private int goldIndex   = 0;
+        private int itemIndex   = 0;
+        private int wandIndex   = 0;
+        private int enemyIndex  = 0;
+        private List<string> enemySpawnNames = new List<string>();
+        private string propsSearch = "";
+        private List<string> propsFiltered = new List<string>();
+        private int propsFilteredIndex = 0;
+        private bool searchFocused = false;
+        private bool searchMode = false;
 
         // ── Styles ───────────────────────────────────────────────
         private GUIStyle styleTab, styleTabActive, styleLabel, styleLabelSelected;
@@ -77,7 +79,7 @@ namespace HuysHUD
         private FieldInfo localInstanceField;
 
         // ── Spawn ────────────────────────────────────────────────
-        private Dictionary<string, UnityEngine.Object> itemCache = new Dictionary<string, UnityEngine.Object>();
+        private Dictionary<string, GameObject> itemCache = new Dictionary<string, GameObject>();
         private List<string> wandNames = new List<string>();
         private bool itemsCached = false;
 
@@ -201,87 +203,38 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
         // ── Spawn ────────────────────────────────────────────────
         void CacheItems()
         {
-            itemCache.Clear(); wandNames.Clear();
-            Assembly asm = Assembly.Load("Assembly-CSharp");
-            System.Type valType=null, puppetType=null, wandType=null;
-            foreach (System.Type t in asm.GetTypes())
-            {
-                if (t.FullName=="YAPYAP.ValuableObject")        valType    = t;
-                if (t.FullName=="YAPYAP.NetworkPuppetProp")     puppetType = t;
-                if (t.FullName=="YAPYAP.NetworkPuppetWandProp") wandType   = t;
-            }
-            foreach (System.Type type in new System.Type[]{valType,puppetType})
-            {
-                if (type==null) continue;
-                foreach (UnityEngine.Object obj in Resources.FindObjectsOfTypeAll(type))
-                {
-                    if (obj==null) continue;
-                    GameObject go = obj as GameObject;
-                    if (go==null){Component c=obj as Component;if(c!=null)go=c.gameObject;}
-                    if (go!=null&&go.scene.name==null)
-                    {
-                        string k=go.name.ToLower();
-                        NetworkIdentity nid = go.GetComponent<NetworkIdentity>();
-                        if (nid==null || nid.assetId==0) continue;
-                        // Skip duplicates (names ending with " (N)")
-                        if (k.Length > 3 && k[k.Length-1] == ')' && k[k.Length-3] == '(') continue;
-                        // Prefer entries without bad placeholder assetId, but keep if nothing else
-                        if (itemCache.ContainsKey(k)) continue;
-                        itemCache[k]=obj;
-                    }
-                }
-            }
-            if (wandType!=null)
-            {
-                foreach (UnityEngine.Object obj in Resources.FindObjectsOfTypeAll(wandType))
-                {
-                    if (obj==null) continue;
-                    GameObject go = obj as GameObject;
-                    if (go==null){Component c=obj as Component;if(c!=null)go=c.gameObject;}
-                    if (go!=null&&go.scene.name==null)
-                    {
-                        NetworkIdentity nid = go.GetComponent<NetworkIdentity>();
-                        if (nid!=null && nid.assetId!=0)
-                        {
-                            string k=go.name.ToLower();
-                            // Skip duplicates
-                            if (k.Length > 3 && k[k.Length-1] == ')' && k[k.Length-3] == '(') continue;
-                            wandNames.Add(go.name);
-                            if (!itemCache.ContainsKey(k)) itemCache[k]=obj;
-                        }
-                    }
-                }
-            }
-            // Deduplicate wand names
-            List<string> seen = new List<string>();
-            List<string> deduped = new List<string>();
-            foreach (string w in wandNames)
-            {
-                if (!seen.Contains(w)) { seen.Add(w); deduped.Add(w); }
-            }
-            wandNames = deduped;
-            // Filter wand names to only cached entries
-            List<string> validWands = new List<string>();
-            foreach (string w in wandNames)
-                if (itemCache.ContainsKey(w.ToLower())) validWands.Add(w);
-            wandNames = validWands;
+            itemCache.Clear();
+            wandNames.Clear();
+            if (NetworkManager.singleton == null) { Logger.LogWarning("[HuysHUD] NetworkManager.singleton is null"); return; }
 
+            foreach (GameObject go in NetworkManager.singleton.spawnPrefabs)
+            {
+                if (go == null) continue;
+                NetworkIdentity nid = go.GetComponent<NetworkIdentity>();
+                if (nid == null || nid.assetId == 0) continue;
+                string key = go.name.ToLower();
+                if (itemCache.ContainsKey(key)) continue;
+                itemCache[key] = go;
+                if (go.GetComponent("YAPYAP.NetworkPuppetWandProp") != null || key.Contains("wand"))
+                    wandNames.Add(go.name);
+            }
+            wandNames.Sort();
+
+            // Categorize into dynamic lists
+            potionNames.Clear(); goldNames.Clear(); itemNames.Clear(); enemySpawnNames.Clear();
+            foreach (var kvp in itemCache)
+            {
+                string n = kvp.Key;
+                string display = kvp.Value.name;
+                if (n.Contains("potion"))          potionNames.Add(display);
+                else if (n.Contains("gold") || n.Contains("gem") || n.Contains("coin") || n.Contains("treasure")) goldNames.Add(display);
+                else if (n.Contains("npc") || n.Contains("enemy") || n.Contains("monster") || n.Contains("creature") || n.Contains("frog") || n.Contains("goat") || n.Contains("spider") || n.Contains("goblin") || n.Contains("jester") || n.Contains("slime") || n.Contains("fetch") || n.Contains("gargoyle") || n.Contains("guard") || n.Contains("fairy") || n.Contains("couch") || n.Contains("mimic") || n.Contains("merchant") || n.Contains("shopkeeper")) enemySpawnNames.Add(display);
+                else if (!n.Contains("wand"))      itemNames.Add(display);
+            }
+            potionNames.Sort(); goldNames.Sort(); itemNames.Sort(); enemySpawnNames.Sort();
+            Logger.LogInfo(string.Format("[HuysHUD] Cached {0} items: {1} potions, {2} gold, {3} wands, {4} items, {5} enemies", itemCache.Count, potionNames.Count, goldNames.Count, wandNames.Count, itemNames.Count, enemySpawnNames.Count));
             itemsCached = true;
-            Logger.LogInfo(string.Format("[HuysHUD] Cached {0} items, {1} wands", itemCache.Count, wandNames.Count));
-        }
-
-        // Known correct assetIds from server (discovered via LogSpawnedObjects)
-        uint GetCorrectAssetId(string searchKey, uint fallback)
-        {
-            string key = searchKey.ToLower();
-            foreach (var kvp in NetworkClient.spawned)
-            {
-                if (kvp.Value == null) continue;
-                string n = kvp.Value.gameObject.name.ToLower().Replace("(clone)", "").Trim();
-                if (n.Contains(key) && kvp.Value.assetId != 0 && kvp.Value.assetId != 2433275061u)
-                    return kvp.Value.assetId;
-            }
-            return fallback;
+            UpdatePropsFilter();
         }
 
         void LogSpawnedObjects()
@@ -364,13 +317,9 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
                 Vector3 pos = tr.position + tr.forward*2f + Vector3.up*0.5f;
 
                 string key = searchKey.ToLower();
-                UnityEngine.Object found = null;
-                foreach (var kvp in itemCache) if(kvp.Key.Contains(key)){found=kvp.Value;break;}
-                if (found==null) { Logger.LogWarning("[HuysHUD] Not in cache: "+searchKey); return; }
-
-                GameObject go = found as GameObject;
-                if (go==null){Component c=found as Component;if(c!=null)go=c.gameObject;}
-                if (go==null) { Logger.LogWarning("[HuysHUD] No GameObject for: "+searchKey); return; }
+                GameObject go = null;
+                foreach (var kvp in itemCache) if(kvp.Key.Contains(key)){go=kvp.Value;break;}
+                if (go==null){Logger.LogWarning("[HuysHUD] Item not found: "+searchKey); return;}
 
                 NetworkIdentity nid = go.GetComponent<NetworkIdentity>();
                 if (nid==null) { Logger.LogWarning("[HuysHUD] No NetworkIdentity on: "+go.name); return; }
@@ -396,13 +345,10 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
                 }
                 else
                 {
-                    uint spawnAssetId = GetCorrectAssetId(go.name.ToLower().Replace("prop",""), nid.assetId);
-                    if (spawnAssetId==2433275061u) { Logger.LogWarning("[HuysHUD] No valid assetId for client: "+go.name); return; }
-                    Logger.LogInfo(string.Format("[HuysHUD] Client using assetId={0} for {1}", spawnAssetId, go.name));
                     MethodInfo mc = gm.GetType().GetMethod("CmdRequestSpawnNetworkPrefab",
                         BindingFlags.Instance|BindingFlags.Public, null,
                         new System.Type[]{typeof(uint),typeof(Vector3),typeof(Quaternion)}, null);
-                    if (mc!=null) mc.Invoke(gm, new object[]{spawnAssetId, pos, Quaternion.identity});
+                    if (mc!=null) mc.Invoke(gm, new object[]{nid.assetId, pos, Quaternion.identity});
                     else Logger.LogWarning("[HuysHUD] CmdRequestSpawnNetworkPrefab not found");
                 }
             }
@@ -439,7 +385,7 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
 
             if (Input.GetKeyDown(KeyCode.Tab))
             {
-                if (showOverlay) activeTab = activeTab==0 ? 1 : 0;
+                if (showOverlay) { activeTab = activeTab==0 ? 1 : 0; if(activeTab==1) UpdatePropsFilter(); }
                 if (showOverlay2) activeTab2 = activeTab2==2 ? 3 : 2;
                 // Don't auto-read - user must press Num0 or Re-read
                 lastNavTime = Time.unscaledTime;
@@ -491,30 +437,69 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
 
         void HandlePropsTab(bool canNav)
         {
+            if (Input.GetKeyDown(KeyCode.KeypadDivide))
+            {
+                if (!searchMode) { searchMode = true; GUI.FocusControl("PropsSearch"); }
+                else { searchMode = false; searchFocused = false; GUI.FocusControl(""); }
+            }
             if (canNav && (Input.GetKey(KeyCode.Keypad4)||Input.GetKey(KeyCode.Keypad6)))
             {
                 int dir = Input.GetKey(KeyCode.Keypad6) ? 1 : -1;
-                propsCategory = (propsCategory+dir+4)%4;
+                propsCategory = (propsCategory+dir+5)%5;
+                propsSearch = ""; propsFilteredIndex = 0; searchMode = false;
+                UpdatePropsFilter();
                 lastNavTime = Time.unscaledTime;
             }
             if (canNav && (Input.GetKey(KeyCode.Keypad8)||Input.GetKey(KeyCode.Keypad2)))
             {
                 bool fwd = Input.GetKey(KeyCode.Keypad2);
                 int dir = fwd ? 1 : -1;
-                if (propsCategory==0) potionIndex=(potionIndex+dir+potionKeys.Length)%potionKeys.Length;
-                else if (propsCategory==1) goldIndex=(goldIndex+dir+goldKeys.Length)%goldKeys.Length;
-                else if (propsCategory==2 && wandNames.Count>0) wandIndex=(wandIndex+dir+wandNames.Count)%wandNames.Count;
-                else if (propsCategory==3) enemyIndex=(enemyIndex+dir+enemyKeys.Length)%enemyKeys.Length;
+                if (!searchFocused && propsFiltered.Count>0)
+                    propsFilteredIndex=(propsFilteredIndex+dir+propsFiltered.Count)%propsFiltered.Count;
                 lastNavTime = Time.unscaledTime;
             }
         }
 
+        List<string> GetCurrentCategoryList()
+        {
+            if (propsCategory==0) return potionNames;
+            if (propsCategory==1) return goldNames;
+            if (propsCategory==2) return wandNames;
+            if (propsCategory==3) return itemNames;
+            return enemySpawnNames;
+        }
+
+        int GetCurrentCategoryIndex()
+        {
+            if (propsCategory==0) return potionIndex;
+            if (propsCategory==1) return goldIndex;
+            if (propsCategory==2) return wandIndex;
+            if (propsCategory==3) return itemIndex;
+            return enemyIndex;
+        }
+
+        void SetCurrentCategoryIndex(int v)
+        {
+            if (propsCategory==0) potionIndex=v;
+            else if (propsCategory==1) goldIndex=v;
+            else if (propsCategory==2) wandIndex=v;
+            else if (propsCategory==3) itemIndex=v;
+            else enemyIndex=v;
+        }
+
+        void UpdatePropsFilter()
+        {
+            propsFiltered.Clear();
+            List<string> src = GetCurrentCategoryList();
+            foreach (string s in src)
+                if (string.IsNullOrEmpty(propsSearch) || s.ToLower().Contains(propsSearch.ToLower()))
+                    propsFiltered.Add(s);
+            propsFilteredIndex = Mathf.Clamp(propsFilteredIndex, 0, Mathf.Max(0, propsFiltered.Count-1));
+        }
+
         void SpawnCurrentProp()
         {
-            if (propsCategory==0) SpawnItem(potionKeys[potionIndex]);
-            else if (propsCategory==1) SpawnItem(goldKeys[goldIndex]);
-            else if (propsCategory==2 && wandNames.Count>0) SpawnItem(wandNames[wandIndex]);
-            else if (propsCategory==3) SpawnEnemy(enemyKeys[enemyIndex]);
+            if (propsFiltered.Count>0) SpawnItem(propsFiltered[propsFilteredIndex]);
         }
 
         // ── Balance ──────────────────────────────────────────────
@@ -897,7 +882,7 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
             else              DrawPropsTab();
 
             GUILayout.Space(4);
-            if (activeTab==1 && GUILayout.Button("Log Spawned", styleBtn)) LogSpawnedObjects();
+
             GUILayout.Label("Num* toggle  |  Tab switch  |  Num. for Balance/NPCs", styleHint);
             GUI.DragWindow();
         }
@@ -919,56 +904,47 @@ gmType = System.Type.GetType("YAPYAP.GameManager, Assembly-CSharp");
 
         void DrawPropsTab()
         {
+            // Category buttons
             GUILayout.BeginHorizontal();
             for (int i=0; i<propsCategoryLabels.Length; i++)
             {
                 bool sel = i==propsCategory;
                 if (GUILayout.Button(propsCategoryLabels[i], sel?styleTabActive:styleTab, GUILayout.Height(20)))
-                    propsCategory=i;
+                {
+                    propsCategory=i; propsSearch=""; propsFilteredIndex=0; UpdatePropsFilter();
+                }
             }
             GUILayout.EndHorizontal();
-            GUILayout.Label("Num4/6 category  |  Num8/2 cycle item  |  NumEnter spawn", styleHint);
-            GUILayout.Space(4);
+            GUILayout.Space(2);
 
-            if (propsCategory==0)
+            // Search field
+            GUILayout.BeginHorizontal();
+            GUIStyle searchLabel = new GUIStyle(styleLabel);
+            searchLabel.normal.textColor = searchMode ? new Color(0.3f,1f,0.3f) : styleLabel.normal.textColor;
+            GUILayout.Label(searchMode ? "▶ Search:" : "   Search:", searchLabel, GUILayout.Width(70));
+            GUI.SetNextControlName("PropsSearch");
+            if (searchMode) GUI.FocusControl("PropsSearch");
+            string newSearch = GUILayout.TextField(propsSearch, styleLabel);
+            // Num/ typed into field means user wants to exit search
+            if (newSearch.EndsWith("/")) { newSearch = newSearch.Substring(0, newSearch.Length-1); searchMode=false; searchFocused=false; GUI.FocusControl(""); }
+            if (newSearch != propsSearch) { propsSearch = newSearch; propsFilteredIndex=0; UpdatePropsFilter(); }
+            searchFocused = searchMode;
+            if (GUILayout.Button("X", styleBtn, GUILayout.Width(20))) { propsSearch=""; propsFilteredIndex=0; UpdatePropsFilter(); }
+            GUILayout.EndHorizontal();
+            GUILayout.Label(searchMode ? "Num/ again to confirm & exit search" : "Num/ to search  |  Num8/2 navigate  |  NumEnter spawn", styleHint);
+            GUILayout.Space(2);
+
+            // List
+            if (propsFiltered.Count==0) { GUILayout.Label("No items found.", styleLabel); return; }
+            int start=Mathf.Max(0,propsFilteredIndex-2), end=Mathf.Min(propsFiltered.Count-1,start+4);
+            for (int i=start; i<=end; i++)
             {
-                for (int i=0; i<potionLabels.Length; i++)
-                    GUILayout.Label((i==potionIndex?"▶ ":"   ")+potionLabels[i], i==potionIndex?styleLabelSelected:styleLabel);
-                GUILayout.Space(4);
-                if (GUILayout.Button("Spawn: "+potionLabels[potionIndex], styleBtn)) SpawnItem(potionKeys[potionIndex]);
+                bool sel = i==propsFilteredIndex;
+                GUILayout.Label((sel?"▶ ":"   ")+propsFiltered[i], sel?styleLabelSelected:styleLabel);
             }
-            else if (propsCategory==1)
-            {
-                for (int i=0; i<goldLabels.Length; i++)
-                    GUILayout.Label((i==goldIndex?"▶ ":"   ")+goldLabels[i], i==goldIndex?styleLabelSelected:styleLabel);
-                GUILayout.Space(4);
-                if (GUILayout.Button("Spawn: "+goldLabels[goldIndex], styleBtn)) SpawnItem(goldKeys[goldIndex]);
-            }
-            else if (propsCategory==2)
-            {
-                if (wandNames.Count==0) { GUILayout.Label("No wands cached", styleLabel); return; }
-                GUILayout.Label("Num8/2 cycle wands:", styleLabel);
-                int start=Mathf.Max(0,wandIndex-2), end=Mathf.Min(wandNames.Count-1,start+4);
-                for (int i=start; i<=end; i++)
-                {
-                    bool sel = i==wandIndex;
-                    GUILayout.Label((sel?"▶ ":"   ")+wandNames[i], sel?styleLabelSelected:styleLabel);
-                }
-                GUILayout.Space(4);
-                if (GUILayout.Button("Spawn: "+wandNames[wandIndex], styleBtn)) SpawnItem(wandNames[wandIndex]);
-            }
-            else if (propsCategory==3)
-            {
-                GUILayout.Label("Num8/2 cycle  |  Host only", styleHint);
-                int estart=Mathf.Max(0,enemyIndex-2), eend=Mathf.Min(enemyLabels.Length-1,estart+4);
-                for (int i=estart; i<=eend; i++)
-                {
-                    bool sel = i==enemyIndex;
-                    GUILayout.Label((sel?"▶ ":"   ")+enemyLabels[i], sel?styleLabelSelected:styleLabel);
-                }
-                GUILayout.Space(4);
-                if (GUILayout.Button("Spawn: "+enemyLabels[enemyIndex], styleBtn)) SpawnEnemy(enemyKeys[enemyIndex]);
-            }
+            GUILayout.Space(4);
+            GUILayout.Label(string.Format("{0}/{1}", propsFilteredIndex+1, propsFiltered.Count), styleHint);
+            if (GUILayout.Button("Spawn: "+propsFiltered[propsFilteredIndex], styleBtn)) SpawnCurrentProp();
         }
     }
 }
